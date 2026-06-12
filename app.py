@@ -1,41 +1,67 @@
 import streamlit as st
 import geopandas as gpd
-import pyogrio
 import zipfile
 
-def ler_prodes_otimizado(uploaded_file, car_bounds):
-    """
-    Lê o arquivo PRODES apenas dentro dos limites do seu CAR (Bounding Box).
-    Isso reduz a carga na RAM drasticamente e acelera o processamento.
-    """
-    with zipfile.ZipFile(uploaded_file, 'r') as z:
-        # Encontra o arquivo .shp automaticamente
-        shp_name = [f for f in z.namelist() if f.endswith('.shp')][0]
-        
-        # Lê apenas o que intercepta o Bounding Box do CAR
-        # engine='pyogrio' garante a velocidade máxima (leitura via C++)
-        gdf = gpd.read_file(
-            f"zip://{uploaded_file.name}!{shp_name}", 
-            engine='pyogrio',
-            bbox=car_bounds 
-        )
-        return gdf
+# Configuração da página
+st.set_page_config(page_title="Analisador Geo-Pro", layout="wide", page_icon="🌍")
 
-# Na lógica do seu botão processar:
-if processar and f_c and f_p:
-    with st.spinner("Processando com alta precisão..."):
-        # 1. Lê o CAR primeiro (que é pequeno)
-        g_c = gpd.read_file(f_c, engine='pyogrio')
-        
-        # 2. Pega a caixa delimitadora do CAR para usar como filtro
-        bounds = g_c.total_bounds
-        
-        # 3. Lê o PRODES filtrando pelo limite do CAR
-        g_p = ler_prodes_otimizado(f_p, bounds)
-        
-        # 4. Garante que os sistemas de referência (CRS) sejam iguais
-        if g_c.crs != g_p.crs:
-            g_c = g_c.to_crs(g_p.crs)
+# --- LÓGICA DE LOGIN ---
+if "auth" not in st.session_state:
+    st.session_state["auth"] = False
+
+def check_password():
+    if not st.session_state["auth"]:
+        with st.sidebar:
+            st.header("🔐 Acesso Restrito")
+            user = st.text_input("Usuário")
+            password = st.text_input("Senha", type="password")
+            if st.button("Entrar"):
+                if user == "gabriel.palheta" and password == "Gab1914":
+                    st.session_state["auth"] = True
+                    st.rerun()
+                else:
+                    st.error("Dados incorretos.")
+        return False
+    return True
+
+# --- ÁREA PRINCIPAL ---
+if check_password():
+    st.title("🌍 Analisador de Passivos Ambientais")
+    
+    with st.sidebar:
+        st.header("📂 Configurações")
+        st.write("Usuário: Gabriel Palheta")
+        if st.button("Sair"):
+            st.session_state["auth"] = False
+            st.rerun()
             
-        # 5. Cruzamento preciso (Intersection)
-        resultado = gpd.overlay(g_c, g_p, how='intersection')
+        f_c = st.file_uploader("Upload do CAR (ZIP)", type="zip")
+        f_p = st.file_uploader("Upload do PRODES (ZIP)", type="zip")
+        # Definimos o botão AQUI, dentro do bloco que só roda se logado
+        processar = st.button("🚀 Iniciar Processamento")
+
+    # A verificação agora acontece após a definição do botão
+    if processar:
+        if f_c and f_p:
+            with st.spinner("Processando..."):
+                try:
+                    # Função de leitura
+                    def ler(f):
+                        with zipfile.ZipFile(f, 'r') as z:
+                            shp = [name for name in z.namelist() if name.endswith('.shp')][0]
+                            with z.open(shp) as file:
+                                return gpd.read_file(file, engine='pyogrio')
+                    
+                    g_c = ler(f_c)
+                    g_p = ler(f_p)
+                    
+                    if g_c.crs != g_p.crs:
+                        g_c = g_c.to_crs(g_p.crs)
+                    
+                    resultado = gpd.overlay(g_c, g_p, how='intersection')
+                    st.success(f"Concluído! {len(resultado)} intersecções.")
+                    st.dataframe(resultado)
+                except Exception as e:
+                    st.error(f"Erro: {e}")
+        else:
+            st.warning("Por favor, envie ambos os arquivos ZIP.")
